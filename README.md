@@ -2,6 +2,8 @@
 
 Thai / English marketplace built with a dependency-light JavaScript interface and a Cloudflare Worker. Durable shop, member, product, campaign, and order records and media use the Sites R2 `BUCKET` binding. Cart, wishlist, and selected language stay on the device.
 
+For SnapDeploy/container hosting, use the included Dockerfile or `npm start` on Node 24. See [DEPLOYMENT.md](DEPLOYMENT.md) for ports, health checks, S3/R2 credentials, and the required authentication integration. Without durable storage and authentication, the container serves a read-only catalog preview.
+
 ## Run locally
 
 Node 24 or newer:

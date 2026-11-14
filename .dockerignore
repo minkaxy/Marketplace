@@ -1,0 +1,11 @@
+.git
+.github
+.openai
+.local-data
+node_modules
+dist
+outputs
+.env*
+*.tar.gz
+*.tgz
+baan-market

@@ -21,6 +21,36 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      - name: Verify npm start and health check
+        shell: bash
+        run: |
+          PORT=3080 npm start > /tmp/baan-start.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3080/healthz; then
+              curl --fail --silent http://127.0.0.1:3080/ > /dev/null
+              exit 0
+            fi
+            if ! kill -0 "$app_pid" 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat /tmp/baan-start.log
+          exit 1
+      - name: Verify deployment container
+        shell: bash
+        run: |
+          docker build -t baan-marketplace:test .
+          docker run -d --name baan-smoke -p 127.0.0.1:3081:3000 baan-marketplace:test
+          trap 'docker logs baan-smoke; docker rm -f baan-smoke' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3081/healthz; then
+              curl --fail --silent http://127.0.0.1:3081/api/bootstrap > /dev/null
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: baan-marketplace-worker
