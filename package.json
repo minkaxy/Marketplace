@@ -1,0 +1,17 @@
+{
+  "name": "marketplace",
+  "version": "1.0.0",
+  "description": "Thai / English multi-shop marketplace",
+  "main": "worker/index.mjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/dev.mjs",
+    "test": "node --test scripts/api.test.mjs"
+  },
+  "keywords": [],
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "qrcode-generator": "^2.0.4"
+  }
+}
