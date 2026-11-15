@@ -1,0 +1,11 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {execFileSync} from 'node:child_process';
+await import('./build.mjs');
+const output=path.resolve('outputs'),stage=await fs.mkdtemp(path.join(await fs.mkdir(output,{recursive:true}).then(()=>output),'release-'));
+const files=['public','worker','scripts','deploy','dist','package.json','package-lock.json','README.md','START-HERE.md','DEPLOYMENT.md','config.example.env','start-windows.cmd','start-linux.sh','Dockerfile','compose.yaml','.dockerignore','.gitignore'];
+for(const file of files)await fs.cp(file,path.join(stage,file),{recursive:true});
+const archive=path.join(output,'baan-marketplace-selfhost.tar.gz');
+execFileSync(process.platform==='win32'?'tar.exe':'tar',['-czf',archive,'-C',stage,'.']);
+if(process.platform==='win32')execFileSync('tar.exe',['-a','-cf',path.join(output,'baan-marketplace-selfhost.zip'),'-C',stage,'.']);
+console.log('Release directory: '+stage);console.log('Release archive: '+archive);

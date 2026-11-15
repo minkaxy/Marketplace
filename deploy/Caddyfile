@@ -1,0 +1,4 @@
+# Replace shop.example.com with your own domain, then set PUBLIC_ORIGIN in .env.
+shop.example.com {
+    reverse_proxy 127.0.0.1:3000
+}

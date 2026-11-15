@@ -1,86 +1,41 @@
 import http from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
-import { createBucket } from './storage.mjs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { openDatabase } from './database.mjs';
+import { currentUser,authRequest } from './auth.mjs';
 
-function matches(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const x = Buffer.from(a), y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
-}
-
-export async function createServer({ worker, config = process.env, bucket } = {}) {
-  const BUCKET = bucket || await createBucket(config);
-  const authConfigured = !!(config.AUTH_PROXY_SECRET && config.ADMIN_USER_ID && !BUCKET.readOnly);
-  if (config.AUTH_PROXY_SECRET && config.AUTH_PROXY_SECRET.length < 32) throw new Error('AUTH_PROXY_SECRET must contain at least 32 characters');
-  if (authConfigured) {
-    await BUCKET.put('system/owner', JSON.stringify({ id: config.ADMIN_USER_ID }), { onlyIf: { etagDoesNotMatch: '*' } });
-    const owner = await (await BUCKET.get('system/owner')).json();
-    if (owner.id !== config.ADMIN_USER_ID) throw new Error('ADMIN_USER_ID does not match the stored owner');
-  }
-  const publicOrigin = config.PUBLIC_ORIGIN ? new URL(config.PUBLIC_ORIGIN).origin : null;
-  const server = http.createServer(async (req, res) => {
-    try {
-      const protocol = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-      const origin = publicOrigin || `${protocol}://${req.headers.host}`;
-      const url = new URL(req.url, origin);
-      if (url.origin !== origin) { res.writeHead(400); res.end('Invalid request origin'); return; }
-      if (url.pathname === '/healthz' && ['GET', 'HEAD'].includes(req.method)) {
-        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-        res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ status: 'ok', storage: BUCKET.readOnly ? 'unconfigured' : 's3', authentication: authConfigured ? 'trusted-proxy' : 'unconfigured' }));
-        return;
-      }
-      if (['/signin-with-chatgpt', '/signout-with-chatgpt', '/callback'].includes(url.pathname)) {
-        res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end('<!doctype html><html lang="th"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Account setup required</title><main><h1>ระบบสมาชิกยังไม่เปิดใช้งานบนโฮสต์นี้</h1><p>ผู้ดูแลต้องเชื่อมต่อระบบเข้าสู่ระบบสำหรับโฮสต์ใหม่นี้ก่อน</p><h2>Account setup required</h2><p>Sites sign-in is not available on this host. An authentication gateway must be configured before member features can be used.</p><a href="/">กลับหน้าร้าน / Back to shop</a></main></html>');
-        return;
-      }
-      const headers = new Headers();
-      for (const [key, value] of Object.entries(req.headers)) {
-        if (value !== undefined && !key.startsWith('oai-') && !['x-baan-proxy-secret', 'connection', 'transfer-encoding'].includes(key)) headers.set(key, Array.isArray(value) ? value.join(', ') : value);
-      }
-      // Sites headers are NOT credentials on an ordinary internet-facing container.
-      // Only an independently authenticated gateway holding this secret may supply them.
-      if (authConfigured && matches(req.headers['x-baan-proxy-secret'], config.AUTH_PROXY_SECRET)) {
-        const id = req.headers['oai-authenticated-user-id'];
-        if (typeof id === 'string' && /^[a-zA-Z0-9_-]{1,200}$/.test(id)) {
-          headers.set('oai-authenticated-user-id', id);
-          headers.set('oai-authenticated-user-email', String(req.headers['oai-authenticated-user-email'] || ''));
-        }
-      }
-      if (BUCKET.readOnly && !['GET', 'HEAD'].includes(req.method)) {
-        res.writeHead(503, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Persistent storage is not configured. This deployment is read-only.' }));
-        return;
-      }
-      const chunks = []; let bytes = 0;
-      for await (const chunk of req) {
-        bytes += chunk.length;
-        if (bytes > 26 * 1024 * 1024) { res.writeHead(413); res.end('Upload too large'); return; }
-        chunks.push(chunk);
-      }
-      const request = new Request(url, { method: req.method, headers,
-        ...(!['GET', 'HEAD'].includes(req.method) ? { body: Buffer.concat(chunks) } : {}) });
-      let response = await worker.fetch(request, { BUCKET });
-      if (response.headers.get('content-type')?.startsWith('text/html') && (BUCKET.readOnly || !authConfigured)) {
-        const html = await response.text();
-        const notice = '<div class="notice" role="status" style="margin:0;border-radius:0;text-align:center">โหมดพรีวิว — ระบบสมาชิกและสั่งซื้อยังไม่เปิดใช้งาน · Preview — accounts and checkout are not enabled yet.</div>';
-        response = new Response(html.replace('<body>', '<body>' + notice), { status: response.status, headers: response.headers });
-      }
-      if (url.pathname === '/api/bootstrap' && response.ok) {
-        const data = await response.json();
-        data.deployment = { readOnly: BUCKET.readOnly || !authConfigured };
-        response = new Response(JSON.stringify(data), { status: response.status, headers: response.headers });
-      }
-      res.writeHead(response.status, Object.fromEntries(response.headers));
-      res.end(req.method === 'HEAD' ? undefined : Buffer.from(await response.arrayBuffer()));
-    } catch (error) {
-      console.error('Request failed:', error.name || 'Error');
-      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Server error. Check storage and runtime configuration.' }));
-    }
-  });
-  server.headersTimeout = 15000;
-  server.requestTimeout = 120000;
-  server.on('close', () => BUCKET.close?.());
-  return server;
+export async function createServer({worker,config=process.env,database}={}){
+ const db=database||await openDatabase(config.DATA_DIR||path.resolve('data'));
+ const tokenPath=path.join(db.root,'setup-token.txt');let setupToken=config.SETUP_TOKEN;
+ if(!setupToken){try{setupToken=(await fs.readFile(tokenPath,'utf8')).trim();}catch(e){if(e.code!=='ENOENT')throw e;setupToken=randomBytes(24).toString('hex');await fs.writeFile(tokenPath,setupToken+'\n',{flag:'wx',mode:0o600});}}
+ if(setupToken.length<32)throw new Error('SETUP_TOKEN must contain at least 32 characters');
+ const publicOrigin=config.PUBLIC_ORIGIN?new URL(config.PUBLIC_ORIGIN).origin:null;
+ if(publicOrigin&&!publicOrigin.startsWith('https://')&&!/^http:\/\/(localhost|127\.0\.0\.1)(:|$)/.test(publicOrigin))throw new Error('PUBLIC_ORIGIN must use HTTPS for public access');
+ const server=http.createServer(async(req,res)=>{
+  try{
+   const origin=publicOrigin||`http://${req.headers.host}`,url=new URL(req.url,origin);
+   if(url.origin!==origin){res.writeHead(400);res.end('Invalid origin');return;}
+   if(url.pathname==='/healthz'){res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:JSON.stringify({status:'ok',storage:'sqlite'}));return;}
+   if(url.pathname==='/signin-with-chatgpt'||url.pathname==='/signout-with-chatgpt'){res.writeHead(302,{Location:'/#/account'});res.end();return;}
+   const write=!['GET','HEAD'].includes(req.method);
+   if(write&&(req.headers.origin!==origin||req.headers['sec-fetch-site']==='cross-site')){res.writeHead(403,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'คำขอมาจากเว็บไซต์อื่น / Invalid request origin'}));return;}
+   const max=url.pathname.startsWith('/api/upload')?25*1024*1024:1024*1024;
+   if(Number(req.headers['content-length'])>max){res.writeHead(413);res.end('Request too large');return;}
+   let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>max){res.writeHead(413);res.end('Request too large');return;}chunks.push(chunk);}
+   const headers=new Headers();for(const [key,value] of Object.entries(req.headers))if(value!==undefined&&!key.startsWith('oai-')&&!['x-baan-proxy-secret','connection','transfer-encoding'].includes(key))headers.set(key,Array.isArray(value)?value.join(', '):value);
+   const request=new Request(url,{method:req.method,headers,...(write?{body:Buffer.concat(chunks)}:{})});const isAuth=url.pathname.startsWith('/api/auth/');
+   const response=await db.run(write,async bucket=>{
+    if(isAuth)return authRequest(request,bucket,{setupToken,secure:origin.startsWith('https://'),clientAddress:req.socket.remoteAddress});
+    const user=await currentUser(request,bucket);if(user){headers.set('oai-authenticated-user-id',user.id);headers.set('oai-authenticated-user-email',user.email);}
+    const forwarded=new Request(url,{method:req.method,headers,...(write?{body:Buffer.concat(chunks)}:{})});let result=await worker.fetch(forwarded,{BUCKET:bucket});
+    if(url.pathname==='/api/bootstrap'&&result.ok){const body=await result.json();body.auth={provider:'local',setupRequired:!await bucket.get('system/owner')};result=new Response(JSON.stringify(body),{status:200,headers:result.headers});}return result;
+   },{rollbackResponse:!isAuth});
+   const responseHeaders=Object.fromEntries(response.headers);responseHeaders['X-Content-Type-Options']='nosniff';responseHeaders['Referrer-Policy']='same-origin';responseHeaders['X-Frame-Options']='DENY';
+   res.writeHead(response.status,responseHeaders);res.end(req.method==='HEAD'?undefined:Buffer.from(await response.arrayBuffer()));
+  }catch(error){console.error('Request failed:',error.code||error.name);if(!res.headersSent)res.writeHead(500,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'เซิร์ฟเวอร์ทำงานผิดพลาด กรุณาลองอีกครั้ง / Server error. Please try again.'}));}
+ });
+ server.headersTimeout=15000;server.requestTimeout=120000;server.database=db;server.setupTokenPath=tokenPath;
+ const sweep=setInterval(()=>db.run(true,bucket=>worker.maintenance?.({BUCKET:bucket})).catch(error=>console.error('Order expiry failed:',error.name)),60000);sweep.unref();
+ server.on('close',()=>{clearInterval(sweep);if(!database)db.close().catch(()=>{});});return server;
 }

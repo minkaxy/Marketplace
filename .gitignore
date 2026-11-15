@@ -1,6 +1,10 @@
 node_modules/
 outputs/
 .local-data/
+data/
+backups/
+*.sqlite*
+*.db
 dist/
 *.tar.gz
 *.tgz

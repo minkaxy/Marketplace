@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,6 +26,7 @@ jobs:
       - run: npm run build
       - run: npm test
       - name: Verify npm start and health check
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           PORT=3080 npm start > /tmp/baan-start.log 2>&1 &
@@ -38,6 +43,7 @@ jobs:
           cat /tmp/baan-start.log
           exit 1
       - name: Verify deployment container
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           docker build -t baan-marketplace:test .
@@ -51,8 +57,11 @@ jobs:
             sleep 1
           done
           exit 1
+      - run: npm run package
       - uses: actions/upload-artifact@v4
         with:
-          name: baan-marketplace-worker
-          path: dist/server/index.js
+          name: baan-selfhost-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            outputs/*.tar.gz
+            outputs/*.zip
           retention-days: 14

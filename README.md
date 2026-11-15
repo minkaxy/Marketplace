@@ -1,42 +1,53 @@
-# BAAN Marketplace
+# BAAN Marketplace — self-hosted
 
-Thai / English marketplace built with a dependency-light JavaScript interface and a Cloudflare Worker. Durable shop, member, product, campaign, and order records and media use the Sites R2 `BUCKET` binding. Cart, wishlist, and selected language stay on the device.
+A Thai / English marketplace for Windows, Linux and Raspberry Pi ARM64. Requires official Node.js 24 or newer with `node:sqlite`. No external database, storage account, ChatGPT account or authentication gateway is required.
 
-For SnapDeploy/container hosting, use the included Dockerfile or `npm start` on Node 24. See [DEPLOYMENT.md](DEPLOYMENT.md) for ports, health checks, S3/R2 credentials, and the required authentication integration. Without durable storage and authentication, the container serves a read-only catalog preview.
+**[คู่มือเริ่มต้นภาษาไทย](START-HERE.md)** · **[Deployment and operations](DEPLOYMENT.md)**
 
-## Run locally
+## Start
 
-Node 24 or newer:
+Windows: run `start-windows.cmd`. Linux / Raspberry Pi: run `sh start-linux.sh`. Open http://localhost:3000. Release bundles include the QR library and work without an npm install; Node itself is required.
+
+For source development:
 
 ```sh
-npm install
+npm ci
 npm run build
 npm test
-npm run dev
+npm start
 ```
 
-Open http://localhost:4173. The development adapter supplies a local owner identity and stores data under the ignored `.local-data` directory. This adapter is never included in the hosted Worker.
+The first startup generates `data/setup-token.txt`. Use this code on the account screen to create the administrator. There are no default credentials, seed sellers, seed products, synthetic ratings, or automatic administrator sessions. Later members register using email and password. Passwords use salted scrypt; sessions use opaque, server-stored tokens in HttpOnly, SameSite cookies (Secure when PUBLIC_ORIGIN is HTTPS). Login attempts are rate limited and password changes invalidate old sessions.
 
-On Windows PowerShell, use `npm.cmd` if execution policy blocks `npm.ps1`.
+## Included
 
-## First use
+- Platform and shop categories; bilingual product names/descriptions.
+- Shop branding, product image/video uploads and galleries; configurable homepage, logo, favicon, prices and discount sizes.
+- Cart and per-shop shipping, free-shipping thresholds, authoritative server pricing.
+- PromptPay QR with exact amount including shipping; private slip uploads and manual administrator payment approval.
+- Seller-specific orders, carrier/tracking entry, buyer delivery confirmation.
+- Transactional stock reservation, idempotent checkout, cancellation and unpaid-order expiry with stock return.
+- Sponsored placement requests with configurable fees and manual administrator activation.
+- Persistent SQLite data, online backups, restore tool, password recovery CLI, Docker Compose and Linux systemd templates.
 
-The published Site is private. Its first authenticated visitor becomes administrator through a conditional R2 owner record. Initialize it with the owner account before any sharing change. Platform-provided ChatGPT identity is used for members; there are no application passwords. Keep the Site private until an explicit launch and access review.
+## Storage and operations
 
-Open `/#/admin` to configure the name, logo, favicon, colors, bilingual hero copy, images, section visibility, price/discount sizes, platform categories, bank account, PromptPay recipient, default delivery fees, free delivery threshold, and campaign price. No bank details are prefilled. Checkout remains blocked until valid recipient settings are supplied. Existing orders retain a payment-settings snapshot.
+Everything is stored in `data/marketplace.sqlite`, including uploaded media (up to 25 MB per file). SQLite WAL and transactions protect order/stock changes. API mutations are serialized for correctness, so use one application process per data directory. This design suits a single-machine marketplace, not a horizontally scaled cluster. Put data on a reliable local disk/SSD, not a shared network filesystem. Monitor disk use, particularly for video uploads, and back up off-device.
 
-Open `/#/seller` to manage products, both category systems, multiple uploaded image/video files, shop branding, cover, description, shipping, fulfillment, and sponsored placement requests. The administrator can manage the three sample shops; a member can create and manage their own shop. Sample products, ratings and images are illustrative and must be replaced with actual merchandise before launch. Remove a product using the seller dashboard; existing order snapshots remain intact.
+```sh
+npm run backup
+# Stop the server before restoring:
+npm run restore -- backups/your-backup.sqlite
+```
 
-## Payments and delivery
+Password recovery is an operator action: stop the server, then run `node scripts/reset-password.mjs member@example.com`. It creates a one-time recovery code, saved to a private file in the data directory. Give that code privately to the verified account owner, who uses the password recovery form. Do not send codes to unverified requesters. No email delivery service is configured; there are no automatic email-verification or forgotten-password emails.
 
-PromptPay QR uses the EMV payload with the exact order total, including each shop's shipping, and CRC16 checksum. The QR encoder is bundled locally from `qrcode-generator` under its MIT license. A QR is a payment instruction, not proof of payment. The administrator reviews uploaded slips manually, approves/rejects them, and the shop adds a carrier and tracking number. Delivery is manually updated; no carrier or bank API is connected. Test a real recipient and banking-app scan before accepting actual payments.
+## Before accepting money
 
-Homepage recommendations are shuffled across all shops. Sponsored shop cards are explicitly labelled. Campaign purchase requests capture the configured fee; payment is arranged and confirmed by the administrator before activation. There is no automated ad billing or expiry scheduler.
+Enter actual bank/PromptPay recipient details, shipping prices, shop contacts and merchandise through the dashboards. Verify the QR recipient and a complete payment/delivery flow with your own banking app. Payment approval and tracking remain manual: there is no bank reconciliation, carrier API, automated refund, tax invoice or seller payout service. Sponsored placements are manually billed and activated. No real transfer has been performed by automated tests.
 
-## Scope and operational limits
+The theme editor changes content, colors, images, visibility and typography; it is not a freeform drag-and-drop page builder. Google Fonts is optional network-loaded typography; uploaded product media is served locally. The bundled `public/qr.js` includes its MIT license header.
 
-This is an initial working private implementation. It includes theme and content controls, rather than an unrestricted drag-and-drop page builder. Authentication depends on Sites. There are no refund, tax invoice, settlement, stock reservation/decrement, or automatic reconciliation integrations. Product availability is checked when placing an order but inventory is not reserved. R2 order updates are individual object writes, not cross-record transactions; high-volume production use requires transactional order storage and concurrency control. Before opening to customers, configure real seller ownership, banking, shipping and access policies, replace samples, and validate payment/fulfillment with the intended operators.
+## Validation
 
-Server tests cover role separation, cross-origin writes, isolation between customers, authoritative pricing, per-shop delivery, invalid quantities, payment review permissions, and individual-shop shipment transitions. The build embeds all browser assets in `dist/server/index.js`; `.openai/hosting.json` defines the existing Site and R2 binding.
-
-Product photos are remotely served Unsplash images; the UI fonts use Google Fonts. User uploads are stored in R2. Payment slips are accessible only to their uploader and the administrator.
+Integration tests create isolated test accounts and products in a temporary SQLite database, exercise registration/login, permissions, tampered pricing, concurrent inventory, transaction rollback, checkout retries, private uploads, payment approval, shipping, cancellation, expiry, logout/password invalidation, backups and reopening persisted data. These fixtures are never inserted into the application database. CI runs on Windows, Linux x64 and Linux ARM64, plus a Docker startup check. Physical Raspberry Pi performance and actual payment confirmation require testing on the intended hardware/service.

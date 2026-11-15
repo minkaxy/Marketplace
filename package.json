@@ -8,7 +8,10 @@
     "start": "node scripts/start.mjs",
     "build": "node scripts/build.mjs",
     "dev": "node scripts/dev.mjs",
-    "test": "node --test scripts/api.test.mjs scripts/server.test.mjs"
+    "test": "node --test scripts/server.test.mjs",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/restore.mjs",
+    "package": "node scripts/package.mjs"
   },
   "keywords": [],
   "type": "module",
@@ -17,7 +20,6 @@
     "node": ">=24"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1169.0",
     "qrcode-generator": "^2.0.4"
   }
 }
